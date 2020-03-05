@@ -3,6 +3,7 @@
 \name{plot_discovery}
 \alias{plot_discovery}
 \alias{plot.APA_discovery}
+\alias{plot.CSCAn_discovery}
 \alias{plot.PESCAn_discovery}
 \alias{plot.ATA_discovery}
 \alias{plot.ARA_discovery}
@@ -25,6 +26,8 @@
   colour_lim_contrast = NULL,
   ...
 )
+
+\method{plot}{CSCAn_discovery}(x, colour_fun = NULL, colour_lim = NULL, ...)
 
 \method{plot}{PESCAn_discovery}(
   x,
@@ -72,7 +75,7 @@
   ...
 )
 
-\method{plot}{domainogram_discovery}(x, colour_fun = NULL, colour_lim = c(-1, 1), ...)
+\method{plot}{domainogram_discovery}(x, colour_fun = NULL, colour_lim = c(-1, 1), minimalist = FALSE, ...)
 
 \method{plot}{RCP_discovery}(x, contrast = 1, metric = c("smooth"), ...)
 
@@ -112,6 +115,10 @@ region to be plotted.}
 
 \item{end}{An \code{integer} of length 1 with the ending basepair of the
 region to be plotted.}
+
+\item{minimalist}{\code{[domainogram]} A \code{logical} of length 1. If
+\code{TRUE}, plot only the first experiment in the discovery and don't plot
+any axis, titles or legends.}
 
 \item{metric}{\code{[RCP]} Currently not in use.}
 

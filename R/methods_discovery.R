@@ -133,19 +133,20 @@ bundle.ARMLA_discovery <- function(..., collapse = "_") {
              call. = FALSE)
       }
       new <- do.call(c, slot)
-      dim(new) <- c(dims[1,1:2], sum(dims[, 3]))
+      dim(new) <- c(head(dims[1, ], -1), sum(dims[, ncol(dims)]))
 
       # Check dimnames
       dnames <- lapply(slot, dimnames)
-      expnames <- do.call(c, lapply(dnames, `[[`, 3))
+      dlen <- lengths(dnames)[1]
+      expnames <- do.call(c, lapply(dnames, `[[`, dlen))
       if (length(unique(expnames)) < length(expnames)) {
         expnames <- unlist(lapply(seq_len(nrow(dims)), function(j) {
-          paste0(dnames[[j]][[3]], collapse, disco_names[[j]])
+          paste0(dnames[[j]][[dlen]], collapse, disco_names[[j]])
         }))
       }
-
+      dnames <- dnames[[1]]
       # Set dimnames
-      dimnames(new) <- list(dnames[[1]][[1]], dnames[[1]][[2]], expnames)
+      dimnames(new) <- c(head(dnames, -1), list(expnames))
     } else if (class(slot[[1]]) == "list") {
 
       # Resolve potential naming conflicts
@@ -196,17 +197,29 @@ bundle.domainogram_discovery <- function(..., collapse = "_"){
   }
   
   # Combine and reorder
-  out <- do.call(rbind, discos)
-  out <- out[order(out$window, out$position, out$experiment), ]
-  
-  # Filter out duplicates
-  dups <- duplicated(out[, c("window", "position", "experiment")])
-  if (sum(dups) > 0) {
-    message("Found duplicated insulation scores which are discarded.")
+  out <- discos[[1]]
+  if (length(discos) > 1L) {
+    for(i in 2:length(discos)) {
+      out <- merge(out, discos[[i]], by = c("window", "position"))
+    }
   }
-  out <- out[!dups,]
+  
+  expnames <- lapply(discos, function(x){tail(colnames(x), -2)})
+  cnames <- tail(colnames(out), -2)
+  if (!identical(cnames, unlist(expnames))) {
+    newnames <- lapply(seq_along(expnames), function(i) {
+      paste0(expnames[[i]], collapse, i)
+    })
+    colnames(out)[-c(1:2)] <- unlist(newnames)
+  }
+  
+  attr(out, "resolution") <- res[[1]]
+  attr(out, 'chrom') <- chroms[[1]]
+  class(out) <- c("domainogram_discovery", "data.frame")
+
   out
 }
+
 
 #' @rdname bundle
 #' @export
@@ -229,6 +242,7 @@ bundle.IS_discovery <- function(..., collapse = "_"){
   
   # Extract insulation scores
   dfs <- lapply(discos, `[[`, "insula_score")
+  dfs <- lapply(dfs, as.data.table)
   expnames <- lapply(lapply(dfs, colnames), tail, -4)
   
   # Merge insulation scores
@@ -246,11 +260,10 @@ bundle.IS_discovery <- function(..., collapse = "_"){
       paste0(expnames[[i]], collapse, i)
     })
     colnames(out)[-c(1:4)] <- unlist(newnames)
-    return(out)
   }
   setkey(out, "chrom", "start")
   
-  structure(list(insula_score = out),
+  structure(list(insula_score = as.data.frame(out)),
             PACKAGE = "GENOVA",
             colours = cols,
             class = "IS_discovery",
@@ -288,7 +301,7 @@ bundle.virtual4C_discovery <- function(..., collapse = "_") {
   
   xlims <- unique(unlist(lapply(discos, attr, "xlim")))
   expnames <- unlist(lapply(discos, function(disc) {
-    unique(disc$data$experiment)
+    tail(colnames(disc$data), -2)
   }))
 
   datas <- lapply(discos, function(disc){disc$data})
@@ -302,15 +315,20 @@ bundle.virtual4C_discovery <- function(..., collapse = "_") {
   
     datas <- lapply(seq_along(datas), function(i) {
       x <- datas[[i]]
-      x$experiment <- paste0(x$experiment, collapse, i)
+      colnames(x) <- c(head(colnames(x), 2),
+                       paste0(tail(colnames(x), -2), collapse, i))
       x
     })
   }
-  datas <- rbindlist(datas)
-  datas <- datas[order(chromosome, mid)]
-  expnames <- unique(datas$experiment)
   
-  structure(list(data = datas), 
+  out <- datas[[1]]
+  if (length(datas) > 1) {
+    for (i in tail(seq_along(datas), -1)) {
+      out <- merge(out, datas[[i]], by = c("chromosome", "mid"))
+    }
+  }
+  
+  structure(list(data = out), 
             class = "virtual4C_discovery",
             'viewpoint' = vps, 
             'xlim' = xlims,
@@ -348,7 +366,7 @@ bundle.CS_discovery <- function(..., collapse = "_") {
   }
   
   dats <- lapply(discos, function(disc) {
-    dat <- disc$compart_scores
+    dat <- as.data.table(disc$compart_scores)
     setkeyv(dat, c("chrom", "start"))
     dat[, party := inverse.rle(attr(disc, "partitioning"))]
     dat
@@ -380,7 +398,7 @@ bundle.CS_discovery <- function(..., collapse = "_") {
   cols <- lapply(discos, attr, "colours")
   cols <- unname(unlist(cols))
   
-  structure(list(compart_scores = dat),
+  structure(list(compart_scores = as.data.frame(dat)),
             package = "GENOVA",
             colours = cols,
             class = "CS_discovery",
@@ -465,37 +483,51 @@ bundle.RCP_discovery <- function(..., collapse = "_") {
 
 #' @rdname bundle
 #' @export
-bundle.DI_discovery <- function(..., collapse = "_") {
+bundle.DI_discovery <- function(..., collapse = "_"){
   discos <- list(...)
-  if (length(discos) < 2) {
-    message("Attempting to bundle a single object. Input is returned.")
-    return(discos[[1]])
-  }
   
   # Check for possible errors
   classes <- vapply(lapply(discos, class), `[`, character(1), 1)
   if (length(unique(classes)) > 1) {
     stop("Can only bundle discoveries of the same type.", call. = FALSE)
   }
-  
-  res <- unique(vapply(discos, attr, numeric(1), "resolution"))
-  if (length(res) > 1) {
-    stop("Can only bundle discoveries of the same resolution.",
+  res <- vapply(discos, attr, numeric(1), "resolution")
+  if (length(unique(res)) > 1) {
+    stop("Can only bundle insulation scores of the same resolution.",
          call. = FALSE)
   }
+  # Grab colours
+  cols <- lapply(discos, attr, "colours")
+  cols <- unlist(cols)
   
-  cols <- unname(vapply(discos, attr, character(1), "colours"))
+  # Extract insulation scores
+  dfs <- lapply(discos, `[[`, "DI")
+  expnames <- lapply(lapply(dfs, colnames), tail, -4)
   
-  dats <- lapply(discos, `[[`, "DI")
-  dats <- rbindlist(dats)
-  setkeyv(dats, "bin")
+  # Merge insulation scores
+  out <- dfs[[1]]
+  if (length(dfs) > 1) {
+    for (i in tail(seq_along(dfs), -1)) {
+      out <- merge(out, dfs[[2]], by = c("chrom", "start", "end", "bin"))
+    }
+  }
   
-  structure(list(DI = dats),
+  # Check output column names
+  cnames <- tail(colnames(out), -4)
+  if (!identical(cnames, unlist(expnames))) {
+    newnames <- lapply(seq_along(expnames), function(i) {
+      paste0(expnames[[i]], collapse, i)
+    })
+    colnames(out)[-c(1:4)] <- unlist(newnames)
+  }
+  
+  structure(list(DI = out),
+            PACKAGE = "GENOVA",
+            colours = cols,
             class = "DI_discovery",
-            package = "GENOVA",
-            resolution = res,
-            colours = cols)
+            resolution = attr(discos[[1]], "resolution"))
 }
+
 
 #' @rdname bundle
 #' @export
@@ -604,7 +636,7 @@ unbundle.ARMLA_discovery <- function(discovery, ...) {
   expnames <- lapply(slotnames, function(i) {
     thisclass <- class(discovery[[i]])
     if (thisclass == "array") {
-      thesenames <- dimnames(discovery[[i]])[[3]]
+      thesenames <- tail(dimnames(discovery[[i]]), 1)[[1]]
     } else if (thisclass == "list") {
       thesenames <- names(discovery[[i]])
     }
@@ -625,7 +657,15 @@ unbundle.ARMLA_discovery <- function(discovery, ...) {
 #' @rdname unbundle
 #' @export
 unbundle.domainogram_discovery <- function(discovery, ...) {
-  split(discovery, discovery$experiment)
+  expnames <- tail(colnames(discovery), -2)
+  lapply(setNames(expnames, expnames), function(i) {
+    col <- c("window", "position", i)
+    out <- discovery[, col]
+    attr(out, "resolution") <- attr(discovery, "resolution")
+    attr(out, "chrom") <- attr(discovery, "chrom")
+    attr(out, "package") <- attr(discovery, "package")
+    out
+  })
 }
 
 #' @rdname unbundle
@@ -637,8 +677,7 @@ unbundle.IS_discovery <- function(discovery, ...) {
   })
   
   out <- lapply(setNames(seq_along(exps), exps), function(i) {
-    structure(list(insula_score = discovery$insula_score[, cols[[i]], 
-                                                         with = FALSE]),
+    structure(list(insula_score = discovery$insula_score[, cols[[i]]]),
               PACKAGE = "GENOVA",
               colours = attr(discovery, "colours")[i],
               class = "IS_discovery",
@@ -650,19 +689,24 @@ unbundle.IS_discovery <- function(discovery, ...) {
 #' @rdname unbundle
 #' @export
 unbundle.virtual4C_discovery <- function(discovery, ...) {
-  attris <- attributes(discovery)
-  newdata <- split(discovery$data, discovery$data$experiment)
-  lapply(setNames(seq_along(newdata), names(newdata)), function(i) {
-    vp <- attris$viewpoint[attris$viewpoint$exp == newdata[[i]]$experiment[1],]
-    rownames(vp) <- NULL
-    structure(list(data = newdata[[i]]), class = "virtual4C_discovery",
-              xlim = attris$xlim,
-              viewpoint = vp,
-              sample = attris$sample[i],
-              resolution = attris$resolution,
-              package = attris$package)
+  exps <- tail(colnames(discovery$data), -2)
+  cols <- lapply(setNames(exps, exps), function(i) {
+    c("chromosome", "mid", i)
+  })
+  vp <- attr(discovery, "viewpoint")
+  
+  out <- lapply(setNames(seq_along(exps), exps), function(i) {
+    thisvp <- vp[vp$exp == tail(cols[[i]], 1),]
+    rownames(thisvp) <- NULL
+    structure(list(data = discovery$data[, cols[[i]]]),
+              package = "GENOVA",
+              colours = attr(discovery, "colours")[i],
+              class = "virtual4C_discovery",
+              resolution = attr(discovery, "resolution"),
+              viewpoint = thisvp)
   })
 }
+
 
 #' @rdname unbundle
 #' @export
@@ -673,8 +717,7 @@ unbundle.CS_discovery <- function(discovery, ...) {
   })
   
   out <- lapply(setNames(seq_along(exps), exps), function(i) {
-    structure(list(compart_scores = discovery$compart_scores[, cols[[i]], 
-                                                             with = FALSE]),
+    structure(list(compart_scores = discovery$compart_scores[, cols[[i]]]),
               PACKAGE = "GENOVA",
               colours = attr(discovery, "colours")[i],
               class = "CS_discovery",
@@ -722,13 +765,18 @@ unbundle.RCP_discovery <- function(discovery, ...) {
 #' @rdname unbundle
 #' @export
 unbundle.DI_discovery <- function(discovery, ...) {
-  dats <- split(discovery$DI, discovery$DI$experiment)
-  lapply(setNames(seq_along(dats), names(dats)), function(i) {
-    structure(list(DI = dats[[i]]),
-              package = "GENOVA",
+  exps <- tail(colnames(discovery$DI), -4)
+  cols <- lapply(setNames(exps, exps), function(i) {
+    c("chrom", "start", "end", "bin", i)
+  })
+  
+  out <- lapply(setNames(seq_along(exps), exps), function(i) {
+    structure(list(DI = discovery$DI[, cols[[i]]]),
+              PACKAGE = "GENOVA",
               colours = attr(discovery, "colours")[i],
+              class = "DI_discovery",
               resolution = attr(discovery, "resolution"),
-              class = "DI_discovery")
+              window = attr(discovery, "window"))
   })
 }
 
@@ -773,7 +821,11 @@ subset.ARMLA_discovery <- function(x, i, ...) {
   out <- lapply(x, function(slot) {
     thisclass <- class(slot)
     if (thisclass == "array") {
-      return(slot[,,i, drop = FALSE])
+      if (length(dim(slot)) == 3) {
+        return(slot[,, i, drop = FALSE])
+      } else if (length(dim(slot)) == 4) {
+        return(slot[,,, i, drop = FALSE])
+      }
     } else if (thisclass == "list") {
       return(slot[i])
     }
